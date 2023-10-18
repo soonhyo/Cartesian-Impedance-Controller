@@ -107,6 +107,18 @@ namespace cartesian_impedance_controller
     this->pub_state_.msg_.joint_state.effort = std::vector<double>(this->n_joints_);
     this->pub_state_.msg_.commanded_torques = std::vector<double>(this->n_joints_);
     this->pub_state_.msg_.nullspace_config = std::vector<double>(this->n_joints_);
+
+     =
+    std::string s = (joint_names.find("right") != std::string::npos) ? "/robot/limb/right/joint_command":"/robot/limb/left/joint_command"
+    this->pub_command_.init(*nh, s, 10);
+    this->pub_command_.msg_.header.seq = 0;
+    for (size_t i = 0; i < this->n_joints_; i++)
+    {
+      this->pub_command_.msg_.names.push_back(joint_names.at(i));
+    }
+    this->pub_command_.msg_.command = std::vector<double>(this->n_joints_);
+    this->pub_command_.msg_.mode = baxter_core_msgs::JointCommand::TORQUE_MODE;
+
     return true;
   }
 
@@ -234,10 +246,11 @@ namespace cartesian_impedance_controller
     this->calculateCommandedTorques();
 
     // Write commands
-    for (size_t i = 0; i < this->n_joints_; ++i)
-    {
-      this->joint_handles_[i].setCommand(this->tau_c_(i));
-    }
+    // for (size_t i = 0; i < this->n_joints_; ++i)
+    // {
+    //   this->joint_handles_[i].setCommand(this->tau_c_(i));
+    //   // baxter
+    // }
 
     publishMsgsAndTf();
   }
@@ -422,6 +435,15 @@ namespace cartesian_impedance_controller
         this->pub_torques_.msg_.data[i] = this->tau_c_[i];
       }
       this->pub_torques_.unlockAndPublish();
+    }
+    // publish commanded torques
+    if (this->pub_command_.trylock())
+    {
+      for (size_t i = 0; i < this->n_joints_; i++)
+      {
+        this->pub_command_.msg_.command[i] = this->tau_c_[i];
+      }
+      this->pub_command_.unlockAndPublish();
     }
 
     const Eigen::Matrix<double, 6, 1> error{this->getPoseError()};
