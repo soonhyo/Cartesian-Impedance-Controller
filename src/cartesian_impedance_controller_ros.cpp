@@ -49,29 +49,6 @@ namespace cartesian_impedance_controller
     return true;
   }
 
-  bool CartesianImpedanceControllerRos::initJointHandles(hardware_interface::EffortJointInterface *hw, const ros::NodeHandle &nh)
-  {
-    std::vector<std::string> joint_names;
-    if (!nh.getParam("joints", joint_names))
-    {
-      ROS_ERROR("Invalid or no joint_names parameters provided, aborting controller init!");
-      return false;
-    }
-    for (size_t i = 0; i < joint_names.size(); ++i)
-    {
-      try
-      {
-        this->joint_handles_.push_back(hw->getHandle(joint_names[i]));
-      }
-      catch (const hardware_interface::HardwareInterfaceException &ex)
-      {
-        ROS_ERROR_STREAM("Exception getting joint handles: " << ex.what());
-        return false;
-      }
-    }
-    ROS_INFO_STREAM("Number of joints specified in parameters: " << joint_names.size());
-    return true;
-  }
 
   bool CartesianImpedanceControllerRos::initMessaging(ros::NodeHandle *nh)
   {
@@ -86,6 +63,8 @@ namespace cartesian_impedance_controller
         nh->subscribe("set_config", 1, &CartesianImpedanceControllerRos::controllerConfigCb, this);
     this->sub_reference_pose_ = nh->subscribe("reference_pose", 1, &CartesianImpedanceControllerRos::referencePoseCb, this);
 
+    this->sub_joint_state_ = nh->subscribe("/robot/joint_states", 1, &CartesianImpedanceControllerRos::updateState, this);
+
     // Initializing the realtime publisher and the message
     this->pub_torques_.init(*nh, "commanded_torques", 20);
     this->pub_torques_.msg_.layout.dim.resize(1);
@@ -94,8 +73,8 @@ namespace cartesian_impedance_controller
     this->pub_torques_.msg_.layout.dim[0].stride = 0;
     this->pub_torques_.msg_.data.resize(this->n_joints_);
 
-    std::vector<std::string> joint_names;
-    nh->getParam("joints", joint_names);
+    nh->getParam("joints", this->joint_names);
+    joint_index_offset = joint_names.at(0).find("right") ? 3: 12;
     this->pub_state_.init(*nh, "controller_state", 10);
     this->pub_state_.msg_.header.seq = 0;
     for (size_t i = 0; i < this->n_joints_; i++)
@@ -107,11 +86,8 @@ namespace cartesian_impedance_controller
     this->pub_state_.msg_.joint_state.effort = std::vector<double>(this->n_joints_);
     this->pub_state_.msg_.commanded_torques = std::vector<double>(this->n_joints_);
     this->pub_state_.msg_.nullspace_config = std::vector<double>(this->n_joints_);
-
-     =
-    std::string s = (joint_names.find("right") != std::string::npos) ? "/robot/limb/right/joint_command":"/robot/limb/left/joint_command"
-    this->pub_command_.init(*nh, s, 10);
-    this->pub_command_.msg_.header.seq = 0;
+    std::string topic_name = (joint_names.at(0).find("right") != std::string::npos) ? "/robot/limb/right/joint_command":"/robot/limb/left/joint_command";
+    this->pub_command_.init(*nh, topic_name, 10);
     for (size_t i = 0; i < this->n_joints_; i++)
     {
       this->pub_command_.msg_.names.push_back(joint_names.at(i));
@@ -135,7 +111,7 @@ namespace cartesian_impedance_controller
     }
     try
     {
-      this->rbdyn_wrapper_.init_rbdyn(urdf_string, end_effector_);
+      this->rbdyn_wrapper_.init_rbdyn(urdf_string, this->end_effector_);
     }
     catch (std::runtime_error e)
     {
@@ -167,13 +143,13 @@ namespace cartesian_impedance_controller
     return true;
   }
 
-  bool CartesianImpedanceControllerRos::init(hardware_interface::EffortJointInterface *hw, ros::NodeHandle &node_handle)
+  bool CartesianImpedanceControllerRos::init(ros::NodeHandle &node_handle)
   {
     ROS_INFO("Initializing Cartesian impedance controller in namespace: %s", node_handle.getNamespace().c_str());
 
     // Fetch parameters
-    node_handle.param<std::string>("end_effector", this->end_effector_, "iiwa_link_ee");
-    ROS_INFO_STREAM("End effektor link is: " << this->end_effector_);
+    node_handle.param<std::string>("end_effector", this->end_effector_, "right_gripper");
+    ROS_INFO_STREAM("End effector link is: " << this->end_effector_);
     // Frame for applying commanded Cartesian wrenches
     node_handle.param<std::string>("wrench_ee_frame", this->wrench_ee_frame_, this->end_effector_);
     bool dynamic_reconfigure{true};
@@ -190,7 +166,7 @@ namespace cartesian_impedance_controller
     node_handle.param<bool>("verbosity/state_msgs", this->verbose_state_, false);
     node_handle.param<bool>("verbosity/tf_frames", this->verbose_tf_, false);
 
-    if (!this->initJointHandles(hw, node_handle) || !this->initMessaging(&node_handle) || !this->initRBDyn(node_handle))
+    if (!this->initMessaging(&node_handle) || !this->initRBDyn(node_handle))
     {
       return false;
     }
@@ -201,8 +177,6 @@ namespace cartesian_impedance_controller
     this->root_frame_ = this->rbdyn_wrapper_.root_link();
     node_handle.setParam("root_frame", this->root_frame_);
 
-    // Initialize base_tools and member variables
-    this->setNumberOfJoints(this->joint_handles_.size());
     if (this->n_joints_ < 6)
     {
       ROS_WARN("Number of joints is below 6. Functions might be limited.");
@@ -225,8 +199,6 @@ namespace cartesian_impedance_controller
 
   void CartesianImpedanceControllerRos::starting(const ros::Time & /*time*/)
   {
-    this->updateState();
-
     // Set reference pose to current pose and q_d_nullspace
     this->initDesiredPose(this->position_, this->orientation_);
     this->initNullspaceConfig(this->q_);
@@ -239,8 +211,6 @@ namespace cartesian_impedance_controller
     {
       trajUpdate();
     }
-
-    this->updateState();
 
     // Apply control law in base library
     this->calculateCommandedTorques();
@@ -295,13 +265,13 @@ namespace cartesian_impedance_controller
     return true;
   }
 
-  void CartesianImpedanceControllerRos::updateState()
+  void CartesianImpedanceControllerRos::updateState(const sensor_msgs::JointState &msg)
   {
     for (size_t i = 0; i < this->n_joints_; ++i)
     {
-      this->q_[i] = this->joint_handles_[i].getPosition();
-      this->dq_[i] = this->joint_handles_[i].getVelocity();
-      this->tau_m_[i] = this->joint_handles_[i].getEffort();
+      this->q_[i] = msg.position[i+this->joint_index_offset];
+      this->dq_[i] = msg.velocity[i+this->joint_index_offset];
+      this->tau_m_[i] = msg.effort[i+this->joint_index_offset];
     }
     getJacobian(this->q_, this->dq_, &this->jacobian_);
     getFk(this->q_, &this->position_, &this->orientation_);
@@ -616,4 +586,7 @@ namespace cartesian_impedance_controller
       this->traj_running_ = false;
     }
   }
+
+  
 } // namespace cartesian_impedance_controller
+

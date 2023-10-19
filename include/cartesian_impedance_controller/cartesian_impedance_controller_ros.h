@@ -9,9 +9,6 @@
 #include <ros/node_handle.h>
 #include <ros/time.h>
 
-#include <controller_interface/controller.h>
-#include <hardware_interface/joint_command_interface.h>
-#include <hardware_interface/robot_hw.h>
 #include <pluginlib/class_list_macros.h>
 
 #include <actionlib/server/simple_action_server.h>
@@ -24,6 +21,7 @@
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/WrenchStamped.h>
 #include <std_msgs/Float64MultiArray.h>
+#include <sensor_msgs/JointState.h>
 #include <trajectory_msgs/JointTrajectory.h>
 
 #include <cartesian_impedance_controller/cartesian_impedance_controller.h>
@@ -35,6 +33,8 @@
 #include <cartesian_impedance_controller/stiffnessConfig.h>
 #include <cartesian_impedance_controller/wrenchConfig.h>
 
+#include <baxter_core_msgs/JointCommand.h>
+
 namespace cartesian_impedance_controller
 {
   /*! \brief The ROS control implementation of the Cartesian impedance controller
@@ -42,7 +42,7 @@ namespace cartesian_impedance_controller
   * It utilizes a list of joint names and the URDF description to control these joints.
   */
   class CartesianImpedanceControllerRos
-      : public controller_interface::Controller<hardware_interface::EffortJointInterface>, public CartesianImpedanceController
+      : public CartesianImpedanceController
   {
 
   public:
@@ -59,14 +59,15 @@ namespace cartesian_impedance_controller
     * \param[in] node_handle  Node Handle
     * \return             True on success, false on failure
     */
-    bool init(hardware_interface::EffortJointInterface *hw, ros::NodeHandle &node_handle) override;
-    
+    // bool init(hardware_interface::EffortJointInterface *hw, ros::NodeHandle &node_handle) override;
+
     /*! \brief Starts the controller
     *
     * Updates the states and sets the desired pose and nullspace configuration to the current state.
     * \param[in] time Not used
     */
-    void starting(const ros::Time &) override;
+    bool init(ros::NodeHandle &node_handle);
+    void starting(const ros::Time &);
 
     /*! \brief Periodically called update function
     *
@@ -75,7 +76,7 @@ namespace cartesian_impedance_controller
     * \param[in] time   Not used
     * \param[in] period Control period
     */
-    void update(const ros::Time &, const ros::Duration &period) override;
+    void update(const ros::Time &, const ros::Duration &period);
 
   private:
     /*! \brief Initializes dynamic reconfigure
@@ -85,15 +86,6 @@ namespace cartesian_impedance_controller
     * \return True on success, false on failure. 
     */
     bool initDynamicReconfigure(const ros::NodeHandle &nh);
-
-    /*! \brief Initializes the joint handles
-    *
-    * Fetches the joint names from the parameter server and initializes the joint handles.
-    * \param[in] hw Hardware interface to obtain handles
-    * \param[in] nh Nodehandle
-    * \return True on success, false on failure.
-    */
-    bool initJointHandles(hardware_interface::EffortJointInterface *hw, const ros::NodeHandle &nh);
 
     /*! \brief Initializes messaging
     *
@@ -143,7 +135,7 @@ namespace cartesian_impedance_controller
     *
     * Gets latest joint positions, velocities and efforts and updates the forward kinematics as well as the Jacobian. 
     */
-    void updateState();
+    void updateState(const sensor_msgs::JointState &msg);
 
     /*! \brief Sets damping for Cartesian space and nullspace.
     *
@@ -279,7 +271,6 @@ namespace cartesian_impedance_controller
     */
     void trajUpdate();
 
-    std::vector<hardware_interface::JointHandle> joint_handles_; //!< Joint handles for states and commands
     rbdyn_wrapper rbdyn_wrapper_;   //!< Wrapper for RBDyn library for kinematics 
     std::string end_effector_;      //!< End-effector link name
     std::string robot_description_; //!< URDF of the robot
@@ -322,6 +313,7 @@ namespace cartesian_impedance_controller
 
     // Trajectory handling
     ros::Subscriber sub_trajectory_;  //!< Subscriber for a single trajectory
+    ros::Subscriber sub_joint_state_;
     std::unique_ptr<actionlib::SimpleActionServer<control_msgs::FollowJointTrajectoryAction>> traj_as_; //!< Trajectory action server
     boost::shared_ptr<const control_msgs::FollowJointTrajectoryGoal> traj_as_goal_;  //!< Trajectory action server goal
     trajectory_msgs::JointTrajectory trajectory_; //!< Currently played trajectory
@@ -337,14 +329,14 @@ namespace cartesian_impedance_controller
     tf::TransformBroadcaster tf_br_;  //!< tf transform broadcaster for verbose tf 
     realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray> pub_torques_;  //!< Realtime publisher for commanded torques
     realtime_tools::RealtimePublisher<cartesian_impedance_controller::ControllerState> pub_state_;  //!< Realtime publisher for controller state
+    realtime_tools::RealtimePublisher<baxter_core_msgs::JointCommand> pub_command_;
     tf::Transform tf_br_transform_;   //!< tf transform for publishing
     tf::Vector3 tf_pos_;              //!< tf position for publishing
     tf::Quaternion tf_rot_;           //!< tf orientation for publishing
     ros::Time tf_last_time_ = ros::Time::now(); //!< Last published tf message
-  };
 
-  // Declares this controller
-  PLUGINLIB_EXPORT_CLASS(cartesian_impedance_controller::CartesianImpedanceControllerRos,
-                         controller_interface::ControllerBase);
+    std::vector<std::string> joint_names;
+    int joint_index_offset;
+  };
 
 } // namespace cartesian_impedance_controller

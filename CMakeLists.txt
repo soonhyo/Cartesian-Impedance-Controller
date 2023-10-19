@@ -30,6 +30,7 @@ find_package(catkin REQUIRED COMPONENTS
   tf
   tf_conversions
   trajectory_msgs
+  baxter_core_msgs
 )
 
 add_message_files(FILES
@@ -91,6 +92,17 @@ add_dependencies(
 target_compile_options(${PROJECT_NAME}_ros PUBLIC -std=c++14)
 target_include_directories(${PROJECT_NAME}_ros PUBLIC include ${catkin_INCLUDE_DIRS} ${Eigen3_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS} ${tinyxml2_INCLUDE_DIRS} ${SpaceVecAlg_INCLUDE_DIRS} ${RBDyn_INCLUDE_DIRS} ${mc_rbdyn_urdf_INCLUDE_DIRS})
 target_link_libraries(${PROJECT_NAME}_ros PUBLIC ${PROJECT_NAME} ${catkin_LIBRARIES} ${Boost_LIBRARIES} ${tinyxml2_LIBRARIES} RBDyn mc_rbdyn_urdf ${Eigen3_LIBRARIES})
+
+add_executable(exec src/exec.cpp)
+target_include_directories(exec PUBLIC include ${catkin_INCLUDE_DIRS})
+target_link_libraries(exec ${catkin_LIBRARIES} ${PROJECT_NAME}_ros)
+add_dependencies(
+  exec
+  ${PROJECT_NAME}_ros
+  ${${PROJECT_NAME}_ros_EXPORTED_TARGETS}
+  ${catkin_EXPORTED_TARGETS}
+  ${PROJECT_NAME}_gencfg
+)
 
 
 ## Install project namespaced headers
